@@ -1,0 +1,55 @@
+services:
+  # 1. Database lưu metadata
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: traffic_db
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # 2. Object Storage lưu ảnh
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadminpassword
+    command: server /data --console-address ":9001"
+
+  # 3. Redis làm Broker cho Celery
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # 3. MQTT Broker để nhận tin nhắn từ Edge
+  mqtt:
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  # 4. Subscriber Service (Xử lý dữ liệu và lưu vào DB)
+  subscriber:
+    build: .
+    restart: always
+    depends_on:
+      - db
+      - mqtt
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - MQTT_BROKER=mqtt
+      - MQTT_PORT=1883
+
+networks:
+  default:
+    name: mlops_traffic_net
+    external: true
