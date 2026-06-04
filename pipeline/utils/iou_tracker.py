@@ -23,9 +23,7 @@ def _iou(a: list, b: list) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _xywh_to_xyxy(bbox: list) -> list:
-    x, y, w, h = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
-    return [x, y, x + w, y + h]
+
 
 
 class _Track:
@@ -67,7 +65,9 @@ class IouTracker:
                 print(f"[IOU_TRACKER] Unknown class '{class_name}', skipping")
                 continue
             try:
-                bbox_xyxy = _xywh_to_xyxy(det["bbox"])
+                bbox_xyxy = [float(v) for v in det["bbox"]]
+                if len(bbox_xyxy) != 4:
+                    raise ValueError("bbox must have 4 coordinates")
             except Exception as e:
                 print(f"[IOU_TRACKER] Bad bbox {det.get('bbox')}: {e}, skipping")
                 continue
