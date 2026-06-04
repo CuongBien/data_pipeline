@@ -18,13 +18,15 @@ WORK_DIR = "./cvat_temp"
 IMG_DIR = f"{WORK_DIR}/images"
 LBL_DIR = f"{WORK_DIR}/obj_train_data"
 
-# Class mapping
-CLASS_NAMES = {
-    0: "Bus",
-    1: "Car",
-    2: "Motor",
-    3: "Truck"
-}
+import json
+
+# Class mapping via Environment Variables
+try:
+    _labels_env = os.environ.get("YOLO_LABELS", '{"0": "Bus", "1": "Car", "2": "Motor", "3": "Truck"}')
+    CLASS_NAMES = {int(k): v for k, v in json.loads(_labels_env).items()}
+except Exception as e:
+    print(f"Warning: Failed to parse YOLO_LABELS from environment: {e}")
+    CLASS_NAMES = {0: "Bus", 1: "Car", 2: "Motor", 3: "Truck"}
 
 def get_image_size(img_path):
     """Lấy kích thước ảnh"""
