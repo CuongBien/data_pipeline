@@ -1,0 +1,71 @@
+services:
+  # 1. Celery Worker: Thực thi các task
+  worker:
+    build:
+      context: ..
+      dockerfile: pipeline/Dockerfile
+    command: celery -A pipeline.celery_app worker --loglevel=info --concurrency=1
+    restart: always
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MINIO_URL=minio:9000
+      - CVAT_URL=http://cvat-server:8080
+      - DB_HOST=db
+      - MQTT_BROKER=mqtt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cvat_temp_data:/app/cvat_temp
+      - ./model:/app/pipeline/model
+      - ..:/app
+    networks:
+      - mlops_traffic_net
+
+  # 2. Celery Beat: Lập lịch cho task
+  beat:
+    build:
+      context: ..
+      dockerfile: pipeline/Dockerfile
+    command: celery -A pipeline.celery_app beat --loglevel=info
+    restart: always
+    depends_on:
+      - worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - mlops_traffic_net
+
+  # 3. MQTT Listener: Nhận dữ liệu từ Jetson
+  mqtt_listener:
+    build:
+      context: ..
+      dockerfile: pipeline/Dockerfile
+    command: python3 -m pipeline.services.mqtt_service
+    restart: always
+    environment:
+      - MQTT_BROKER=mqtt
+      - DB_HOST=db
+    depends_on:
+      - beat
+    volumes:
+      - ..:/app
+    networks:
+      - mlops_traffic_net
+
+volumes:
+  cvat_temp_data:
+
+networks:
+  mlops_traffic_net:
+    external: true
