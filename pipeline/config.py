@@ -22,7 +22,7 @@ CVAT_URL = os.getenv("CVAT_URL", "http://host.docker.internal:8080")
 CVAT_USER = os.getenv("CVAT_USER", "django")
 CVAT_PASS = os.getenv("CVAT_PASS", "Rmr2612+")
 CVAT_PROJECT_ID = os.getenv("CVAT_PROJECT_ID", "1")
-CVAT_CLOUD_STORAGE_ID = 5 # ID của MinIO trên CVAT
+CVAT_CLOUD_STORAGE_ID = 5  # ID của MinIO trên CVAT
 
 # ================= TELEGRAM ALERT =================
 TELEGRAM_TOKEN = "8657283198:AAFc2P75rdlPPBEm9ID-N0jV25YMXX487jY"
@@ -30,8 +30,8 @@ TELEGRAM_CHAT_ID = "5994574529"
 BOT_NAME = "TraffiJetsonAlertBot"
 
 # ================= AUTOMATION THRESHOLDS =================
-SYNC_BATCH_THRESHOLD = 2 # Ngưỡng thấp để test nhanh
-TRAIN_DATA_THRESHOLD = 5 # Ngưỡng thấp để test luồng tự động
+SYNC_BATCH_THRESHOLD = 2  # Ngưỡng thấp để test nhanh
+TRAIN_DATA_THRESHOLD = 5  # Ngưỡng thấp để test luồng tự động
 
 # ================= MQTT CONFIG =================
 MQTT_BROKER = os.getenv("MQTT_BROKER", "127.0.0.1")
@@ -39,6 +39,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "traffic/detections")
 MQTT_QOS = 1
 MQTT_CLIENT_ID = f"server_subscriber_{os.getpid()}"
+MQTT_TRACKED_TOPIC = os.getenv("MQTT_TRACKED_TOPIC", "traffic/tracked")
 
 # ================= DB CONFIG =================
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
@@ -73,7 +74,7 @@ TRAIN_DATA_DIR = os.path.join(TRAIN_WORK_DIR, "dataset")
 TRAIN_MODEL_DIR = os.path.join(TRAIN_WORK_DIR, "models")
 
 # Ngưỡng mAP tối thiểu để chấp nhận model mới (so với model cũ)
-MAP_IMPROVEMENT_THRESHOLD = 0.01 
+MAP_IMPROVEMENT_THRESHOLD = 0.01
 # Đường dẫn model cho Training
 TEACHER_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8m_teacher.pt")
 STUDENT_MODEL_PATH = os.path.join(MODEL_DIR, "yolov8n_pruned.pt")
