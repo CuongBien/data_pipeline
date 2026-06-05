@@ -59,3 +59,26 @@ class MinioHandler:
     def ensure_bucket(self, bucket_name):
         if not self.client.bucket_exists(bucket_name):
             self.client.make_bucket(bucket_name)
+
+    def ensure_pipeline_buckets(self):
+        """Tạo đủ bucket pipeline/CVAT cần (trùng tên bucket trên Cloud Storage CVAT)."""
+        from ..config import (
+            BUCKET_ARCHIVED_IMAGES,
+            BUCKET_ARCHIVED_LABELS,
+            BUCKET_BASE_DATASET,
+            BUCKET_LABELED_DATA,
+            BUCKET_PRODUCTION_MODELS,
+            BUCKET_PSEUDO_LABELS,
+            BUCKET_RAW_DATA,
+        )
+
+        for name in (
+            BUCKET_RAW_DATA,
+            BUCKET_PSEUDO_LABELS,
+            BUCKET_ARCHIVED_IMAGES,
+            BUCKET_ARCHIVED_LABELS,
+            BUCKET_LABELED_DATA,
+            BUCKET_BASE_DATASET,
+            BUCKET_PRODUCTION_MODELS,
+        ):
+            self.ensure_bucket(name)

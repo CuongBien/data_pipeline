@@ -1,0 +1,15 @@
+.git
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv
+**/venv
+cvat/
+core-backbone/
+**/.env
+**/.env.*
+*.md
+cvat_temp/
+**/node_modules
+**/*.pt
+!pipeline/model/**/*.pt
