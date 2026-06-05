@@ -18,13 +18,13 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - MINIO_URL=minio:9000
-      - MINIO_ACCESS_KEY=admin
-      - MINIO_SECRET_KEY=password123
-      - CVAT_URL=http://192.168.1.29:8080
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadminpassword
+      - CVAT_URL=${CVAT_URL:-http://172.16.0.252:8080}
       - DB_HOST=db
-      - DB_NAME=c2_tracking
+      - DB_NAME=traffic_db
       - DB_USER=admin
-      - DB_PASSWORD=admin
+      - DB_PASSWORD=password123
       - MQTT_BROKER=mqtt
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -46,9 +46,9 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DB_HOST=db
-      - DB_NAME=c2_tracking
+      - DB_NAME=traffic_db
       - DB_USER=admin
-      - DB_PASSWORD=admin
+      - DB_PASSWORD=password123
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -62,9 +62,9 @@ services:
     environment:
       - MQTT_BROKER=mqtt
       - DB_HOST=db
-      - DB_NAME=c2_tracking
+      - DB_NAME=traffic_db
       - DB_USER=admin
-      - DB_PASSWORD=admin
+      - DB_PASSWORD=password123
     depends_on:
       - beat
     volumes:
