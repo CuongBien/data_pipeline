@@ -22,7 +22,11 @@ CVAT_URL = os.getenv("CVAT_URL", "http://host.docker.internal:8080")
 CVAT_USER = os.getenv("CVAT_USER", "django")
 CVAT_PASS = os.getenv("CVAT_PASS", "Rmr2612+")
 CVAT_PROJECT_ID = os.getenv("CVAT_PROJECT_ID", "1")
-CVAT_CLOUD_STORAGE_ID = 5  # ID của MinIO trên CVAT
+CVAT_CLOUD_STORAGE_ID = int(os.getenv("CVAT_CLOUD_STORAGE_ID", "5"))
+# Traefik CVAT (port 8080) route theo Host 127.0.0.1 — thiếu header → 404 toàn bộ /api/*
+CVAT_HOST_HEADER = os.getenv("CVAT_HOST_HEADER", "127.0.0.1")
+# Endpoint MinIO mà container CVAT reach được (tránh alias DNS "minio" trùng mqtt trên mlops_traffic_net)
+CVAT_MINIO_ENDPOINT = os.getenv("CVAT_MINIO_ENDPOINT", "http://core-backbone-minio-1:9000")
 
 # ================= TELEGRAM ALERT =================
 TELEGRAM_TOKEN = "8657283198:AAFc2P75rdlPPBEm9ID-N0jV25YMXX487jY"

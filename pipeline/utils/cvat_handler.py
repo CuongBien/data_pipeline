@@ -1,58 +1,153 @@
 import time
 import requests
-from ..config import CVAT_URL, CVAT_USER, CVAT_PASS, CVAT_PROJECT_ID, CVAT_CLOUD_STORAGE_ID
+from urllib.parse import quote, urlparse, urlunparse
+
+from ..config import (
+    CVAT_URL,
+    CVAT_USER,
+    CVAT_PASS,
+    CVAT_PROJECT_ID,
+    CVAT_CLOUD_STORAGE_ID,
+    CVAT_HOST_HEADER,
+    CVAT_MINIO_ENDPOINT,
+    MINIO_ACCESS_KEY,
+    MINIO_SECRET_KEY,
+    BUCKET_RAW_DATA,
+)
+
 
 class CVATHandler:
+    CVAT_API_ACCEPT = "application/vnd.cvat+json; version=2.0"
+
     def __init__(self):
-        self.url = CVAT_URL.rstrip('/')
+        self.url = CVAT_URL.rstrip("/")
         self.auth = (CVAT_USER, CVAT_PASS)
         self.project_id = int(CVAT_PROJECT_ID)
-        self.headers = {"Host": "localhost"}
+        self.cloud_storage_id = int(CVAT_CLOUD_STORAGE_ID)
+
+    def _headers(self, json_body=False):
+        headers = {
+            "Accept": self.CVAT_API_ACCEPT,
+            "Host": CVAT_HOST_HEADER,
+        }
+        if json_body:
+            headers["Content-Type"] = "application/json"
+        return headers
+
+    def _request(self, method, path, **kwargs):
+        kwargs.setdefault("auth", self.auth)
+        kwargs.setdefault("headers", self._headers(json_body=kwargs.get("json") is not None))
+        kwargs.setdefault("timeout", 30)
+        url = path if str(path).startswith("http") else f"{self.url}{path}"
+        return requests.request(method, url, **kwargs)
+
+    def _resolve_result_url(self, result_url: str) -> str:
+        """CVAT trả result_url dạng http://127.0.0.1/api/... — map về CVAT_URL thực tế."""
+        if not result_url:
+            raise ValueError("empty result_url")
+
+        if result_url.startswith("/"):
+            return f"{self.url}{result_url}"
+
+        parsed = urlparse(result_url)
+        base = urlparse(self.url)
+        return urlunparse((
+            base.scheme,
+            base.netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+
+    def ensure_cloud_storage(self):
+        """Đồng bộ Cloud Storage CVAT với MinIO thật (endpoint + credential)."""
+        expected_endpoint = CVAT_MINIO_ENDPOINT.rstrip("/")
+        resp = self._request("GET", f"/api/cloudstorages/{self.cloud_storage_id}")
+        resp.raise_for_status()
+        storage = resp.json()
+
+        attrs = storage.get("specific_attributes") or ""
+        endpoint_ok = f"endpoint_url={quote(expected_endpoint, safe='')}" in attrs
+        resource_ok = storage.get("resource") == BUCKET_RAW_DATA
+
+        if endpoint_ok and resource_ok:
+            return storage
+
+        print(
+            f"🔧 [CVAT] Updating cloud storage {self.cloud_storage_id} "
+            f"→ bucket={BUCKET_RAW_DATA}, endpoint={expected_endpoint}"
+        )
+        payload = {
+            "display_name": storage.get("display_name") or "MinIO raw-data",
+            "provider_type": "AWS_S3_BUCKET",
+            "resource": BUCKET_RAW_DATA,
+            "credentials_type": "KEY_SECRET_KEY_PAIR",
+            "key": MINIO_ACCESS_KEY,
+            "secret_key": MINIO_SECRET_KEY,
+            "specific_attributes": f"region=us-east-1&endpoint_url={quote(expected_endpoint, safe='')}",
+        }
+        patch = self._request(
+            "PATCH",
+            f"/api/cloudstorages/{self.cloud_storage_id}",
+            json=payload,
+        )
+        patch.raise_for_status()
+        return patch.json()
 
     def get_label_mapping(self):
         """Lấy danh sách label từ API labels."""
-        endpoint = f"{self.url}/api/labels"
-        params = {"project_id": self.project_id}
-        resp = requests.get(endpoint, params=params, auth=self.auth, headers=self.headers)
+        resp = self._request(
+            "GET",
+            "/api/labels",
+            params={"project_id": self.project_id},
+        )
         resp.raise_for_status()
-        
+
         results = resp.json().get("results", [])
-        return {l["name"]: l["id"] for l in results}
+        return {label["name"]: label["id"] for label in results}
 
     def create_task(self, name, filenames):
         """Tạo task mới từ danh sách file trên Cloud Storage."""
-        endpoint = f"{self.url}/api/tasks"
-        data = {"name": name, "project_id": self.project_id, "image_quality": 85}
-        resp = requests.post(endpoint, json=data, auth=self.auth, headers=self.headers)
+        self.ensure_cloud_storage()
+
+        resp = self._request(
+            "POST",
+            "/api/tasks",
+            json={"name": name, "project_id": self.project_id, "image_quality": 85},
+        )
         resp.raise_for_status()
         task_id = resp.json()["id"]
 
-        # Báo cho CVAT lấy ảnh từ Cloud Storage (MinIO)
-        data_endpoint = f"{endpoint}/{task_id}/data/"
-        print(f"📦 [CVAT] Creating data for task {task_id} using Cloud Storage ID: {CVAT_CLOUD_STORAGE_ID}")
+        print(
+            f"📦 [CVAT] Creating data for task {task_id} "
+            f"using Cloud Storage ID: {self.cloud_storage_id}"
+        )
         payload = {
             "image_quality": 85,
             "storage": "cloud_storage",
-            "cloud_storage_id": int(CVAT_CLOUD_STORAGE_ID),
+            "cloud_storage_id": self.cloud_storage_id,
             "server_files": filenames,
+            "copy_data": False,
             "use_zip_chunks": True,
-            "use_cache": True
+            "use_cache": True,
         }
-        resp = requests.post(data_endpoint, json=payload, auth=self.auth, headers=self.headers)
-        if resp.status_code >= 400:
-            import sys
-            sys.stderr.write(f"❌ [CVAT ERROR] Status: {resp.status_code}\n")
-            sys.stderr.write(f"❌ [CVAT ERROR] Body: {resp.text}\n")
-        resp.raise_for_status()
-        
+        data_resp = self._request("POST", f"/api/tasks/{task_id}/data/", json=payload)
+        if data_resp.status_code >= 400:
+            print(f"❌ [CVAT ERROR] Status: {data_resp.status_code}")
+            print(f"❌ [CVAT ERROR] Body: {data_resp.text}")
+        data_resp.raise_for_status()
+
         self._wait_for_task_status(task_id)
         return task_id
 
     def upload_annotations(self, task_id, shapes):
         """Upload nhãn giả lên task."""
-        endpoint = f"{self.url}/api/tasks/{task_id}/annotations/"
-        data = {"shapes": shapes, "tracks": [], "tags": []}
-        requests.put(endpoint, json=data, auth=self.auth, headers=self.headers).raise_for_status()
+        self._request(
+            "PUT",
+            f"/api/tasks/{task_id}/annotations/",
+            json={"shapes": shapes, "tracks": [], "tags": []},
+        ).raise_for_status()
 
     def export_task_annotations(self, task_id, original_filenames):
         """Xuất nhãn từ CVAT, giải nén và đổi tên về nguyên bản."""
@@ -60,76 +155,104 @@ class CVATHandler:
         import io
         import re
 
-        # Bước 1: Request export
-        trigger_url = f"{self.url}/api/tasks/{task_id}/dataset/export"
+        trigger_url = f"/api/tasks/{task_id}/dataset/export"
         params = {"format": "YOLO 1.1", "save_images": "false"}
-        
+
         print(f"📦 [CVAT] Exporting annotations for Task {task_id}...")
-        resp = requests.post(trigger_url, params=params, auth=self.auth, headers=self.headers, timeout=10)
+        resp = self._request("POST", trigger_url, params=params, timeout=10)
         resp.raise_for_status()
-        
+
         request_id = resp.json().get("id") or resp.json().get("rq_id")
 
-        # Bước 2: Poll status
-        poll_url = f"{self.url}/api/requests/{request_id}"
+        poll_url = f"/api/requests/{request_id}"
         download_url = None
-        for i in range(20):
+        for _ in range(20):
             time.sleep(5)
-            p_resp = requests.get(poll_url, auth=self.auth, headers=self.headers, timeout=10)
+            p_resp = self._request("GET", poll_url, timeout=10)
             status = p_resp.json().get("status")
             if status == "finished":
-                download_url = p_resp.json().get("result_url")
-                if download_url:
-                    download_url = download_url.replace("http://localhost", self.url)
+                raw_url = p_resp.json().get("result_url")
+                if raw_url:
+                    download_url = self._resolve_result_url(raw_url)
                 break
-        else: raise Exception("Export timeout")
+        else:
+            raise Exception("Export timeout")
 
-        # Bước 3: Download và giải nén
-        print(f"✨ [CVAT] Downloading and mapping labels...")
-        d_resp = requests.get(download_url, auth=self.auth, headers=self.headers, timeout=60)
+        if not download_url:
+            raise ValueError("CVAT export finished but result_url is missing")
+
+        print(f"✨ [CVAT] Downloading and mapping labels from {download_url}...")
+        d_resp = requests.get(
+            download_url,
+            auth=self.auth,
+            headers=self._headers(),
+            timeout=60,
+        )
         d_resp.raise_for_status()
-        
-        extracted_labels = {} # {original_filename.txt: content}
-        
+
+        extracted_labels = {}
+
         with zipfile.ZipFile(io.BytesIO(d_resp.content)) as z:
-            # YOLO export của CVAT có cấu trúc: obj_train_data/filename.txt
             for zip_info in z.infolist():
-                if zip_info.filename.endswith('.txt') and 'obj_train_data' in zip_info.filename:
-                    # Lấy tên file nguyên bản (vd: obj_train_data/edge_test_123.txt -> edge_test_123.txt)
-                    base_name = zip_info.filename.split('/')[-1]
-                    
-                    # Nếu tên file là frame_XXXXXX.txt thì mới cần map
-                    if base_name.startswith('frame_'):
-                        match = re.search(r'frame_(\d+)', base_name)
+                if zip_info.filename.endswith(".txt") and "obj_train_data" in zip_info.filename:
+                    base_name = zip_info.filename.split("/")[-1]
+
+                    if base_name.startswith("frame_"):
+                        match = re.search(r"frame_(\d+)", base_name)
                         if match:
                             frame_id = int(match.group(1))
                             if frame_id < len(original_filenames):
-                                final_name = original_filenames[frame_id].rsplit('.', 1)[0] + ".txt"
-                                extracted_labels[final_name] = z.read(zip_info.filename).decode('utf-8')
+                                final_name = original_filenames[frame_id].rsplit(".", 1)[0] + ".txt"
+                                extracted_labels[final_name] = z.read(zip_info.filename).decode("utf-8")
                     else:
-                        # Dùng luôn tên file gốc mà CVAT đã giữ lại
-                        extracted_labels[base_name] = z.read(zip_info.filename).decode('utf-8')
-        
+                        extracted_labels[base_name] = z.read(zip_info.filename).decode("utf-8")
+
         return extracted_labels
 
-    def is_task_ready_for_export(self, task_id):
-        """Kiểm tra job status."""
-        endpoint = f"{self.url}/api/jobs"
-        resp = requests.get(endpoint, params={"task_id": task_id}, auth=self.auth, headers=self.headers)
-        if resp.status_code == 404:
-            endpoint = f"{self.url}/api/tasks/{task_id}/jobs"
-            resp = requests.get(endpoint, auth=self.auth, headers=self.headers)
-            
-        resp.raise_for_status()
-        jobs = resp.json().get("results", [])
-        if not jobs: return False
-        return all(j.get("state") == "completed" for j in jobs)
+    def get_task_export_status(self, task_id):
+        """Trả về trạng thái export: worker chỉ export khi job/task đã hoàn thành trên CVAT."""
+        task_resp = self._request("GET", f"/api/tasks/{task_id}")
+        if task_resp.status_code == 404:
+            return {"ready": False, "reason": "task not found on CVAT"}
 
-    def _wait_for_task_status(self, task_id, timeout=60):
+        task = task_resp.json()
+        task_status = (task.get("status") or "").lower()
+
+        resp = self._request("GET", "/api/jobs", params={"task_id": task_id})
+        if resp.status_code == 404:
+            resp = self._request("GET", f"/api/tasks/{task_id}/jobs")
+
+        jobs = []
+        if resp.ok:
+            payload = resp.json()
+            jobs = payload.get("results", payload if isinstance(payload, list) else [])
+
+        if not jobs:
+            if task_status == "completed":
+                return {"ready": True, "reason": "task status completed (no jobs list)"}
+            return {"ready": False, "reason": "no jobs on CVAT", "task_status": task_status}
+
+        job_states = [(j.get("state"), j.get("stage")) for j in jobs]
+        jobs_completed = all((j.get("state") or "").lower() == "completed" for j in jobs)
+
+        if jobs_completed or task_status == "completed":
+            return {"ready": True, "reason": "completed", "jobs": job_states, "task_status": task_status}
+
+        return {
+            "ready": False,
+            "reason": "job chưa Submit — trên CVAT bấm Menu → Submit annotations (Ctrl+Enter)",
+            "jobs": job_states,
+            "task_status": task_status,
+        }
+
+    def is_task_ready_for_export(self, task_id):
+        return self.get_task_export_status(task_id)["ready"]
+
+    def _wait_for_task_status(self, task_id, timeout=120):
         start_time = time.time()
-        endpoint = f"{self.url}/api/tasks/{task_id}"
         while time.time() - start_time < timeout:
-            resp = requests.get(endpoint, auth=self.auth, headers=self.headers)
-            if resp.json().get("status") in ["Completed", "Finished", "validation"]: return True
+            resp = self._request("GET", f"/api/tasks/{task_id}")
+            if resp.json().get("status") in ["Completed", "Finished", "validation"]:
+                return True
             time.sleep(2)
         return False

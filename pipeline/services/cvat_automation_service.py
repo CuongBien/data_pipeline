@@ -31,10 +31,8 @@ def auto_inference_task():
     db = DBHandler()
     minio = MinioHandler()
     engine = get_inference_engine()
-    
-    # Đảm bảo các bucket tồn tại
-    minio.ensure_bucket(BUCKET_RAW_DATA)
-    minio.ensure_bucket(BUCKET_PSEUDO_LABELS)
+
+    minio.ensure_pipeline_buckets()
     
     # 1. Lấy danh sách bản ghi mới từ DB
     records = db.get_new_records(limit=20)
@@ -80,6 +78,8 @@ def sync_cvat_task():
     cvat = CVATHandler()
     processor = DataProcessor()
 
+    minio.ensure_pipeline_buckets()
+
     # 1. Lấy danh sách bản ghi đã qua bước Inference (status = 'INFERRED')
     records = db.get_records_by_status('INFERRED', limit=SYNC_BATCH_THRESHOLD)
     
@@ -92,7 +92,15 @@ def sync_cvat_task():
     record_ids = [r['id'] for r in records]
     img_files = [r['image_url'] for r in records]
 
+    missing = [name for name in img_files if not minio.exists(BUCKET_RAW_DATA, name)]
+    if missing:
+        raise FileNotFoundError(
+            f"{len(missing)} image(s) not in MinIO bucket '{BUCKET_RAW_DATA}': {missing[:5]}"
+        )
+
     print(f"🚀 [Sync] Starting Cloud Storage sync for {len(records)} records...")
+
+    cvat.ensure_cloud_storage()
 
     # 2. Lấy kích thước ảnh (Chỉ tải 1 tấm duy nhất để lấy resolution)
     sample_img = img_files[0]
@@ -157,60 +165,65 @@ def export_labeled_data_task():
     db = DBHandler()
     minio = MinioHandler()
     cvat = CVATHandler()
-    
-    minio.ensure_bucket(BUCKET_LABELED_DATA)
+
+    minio.ensure_pipeline_buckets()
 
     # 1. Lấy danh sách các CVAT Task ID đang chờ (status = 'IN_CVAT')
     # Ở đây mình sẽ lấy danh sách task_id duy nhất
-    active_tasks = db.get_active_cvat_tasks() # Cần implement hàm này
-    
+    active_tasks = db.get_active_cvat_tasks()
+    if not active_tasks:
+        print("💤 [Export] No tasks with status IN_CVAT in DB.")
+        return
+
     for task_id in active_tasks:
         try:
-            if cvat.is_task_ready_for_export(task_id):
-                print(f"📥 [Export] Task {task_id} is completed! Extracting labels...")
-                
-                # 2. Lấy danh sách file gốc để map tên
-                original_filenames = db.get_task_filenames(task_id)
-                
-                # 3. Export và giải nén nhãn
-                labels_dict = cvat.export_task_annotations(task_id, original_filenames)
-                
-                for label_name, content in labels_dict.items():
-                    # Upload nhãn (.txt) lên MinIO
-                    minio.upload_file(
-                        BUCKET_LABELED_DATA, 
-                        f"labels/{label_name}", 
-                        io.BytesIO(content.encode('utf-8')), 
-                        length=len(content)
+            status = cvat.get_task_export_status(task_id)
+            if not status["ready"]:
+                print(
+                    f"⏳ [Export] Task {task_id} chưa sẵn sàng: {status['reason']} "
+                    f"(jobs={status.get('jobs')}, task_status={status.get('task_status')})"
+                )
+                continue
+
+            print(f"📥 [Export] Task {task_id} is completed! Extracting labels...")
+
+            original_filenames = db.get_task_filenames(task_id)
+            labels_dict = cvat.export_task_annotations(task_id, original_filenames)
+
+            for label_name, content in labels_dict.items():
+                minio.upload_file(
+                    BUCKET_LABELED_DATA,
+                    f"labels/{label_name}",
+                    io.BytesIO(content.encode("utf-8")),
+                    length=len(content),
+                )
+
+                img_name = label_name.replace(".txt", ".jpg")
+                try:
+                    minio.move_object(
+                        BUCKET_ARCHIVED_IMAGES, img_name, BUCKET_LABELED_DATA, f"images/{img_name}"
                     )
-                    
-                    # Di chuyển ảnh tương ứng từ archived-images sang labeled-data/images
-                    img_name = label_name.replace('.txt', '.jpg')
-                    try:
-                        minio.move_object(BUCKET_ARCHIVED_IMAGES, img_name, BUCKET_LABELED_DATA, f"images/{img_name}")
-                    except Exception as img_err:
-                        print(f"⚠️ [Export] Could not move image {img_name}: {img_err}")
-                
-                # Cập nhật DB: IN_CVAT -> LABELED
-                db.update_status_by_task(task_id, "LABELED")
-                print(f"✅ [Export] Task {task_id} synced to labeled-data bucket.")
+                except Exception as img_err:
+                    print(f"⚠️ [Export] Could not move image {img_name}: {img_err}")
 
-                # 4. Gửi Telegram Alert
-                tg = TelegramHandler()
-                tg.alert_task_archived(task_id)
+            db.update_status_by_task(task_id, "LABELED")
+            print(f"✅ [Export] Task {task_id} synced to labeled-data bucket.")
 
-                # 5. Kiểm tra ngưỡng Train (Đếm số lượng ảnh chính xác từ DB)
-                # Lấy tổng số bản ghi có trạng thái 'LABELED'
-                sql_count = f"SELECT COUNT(*) FROM {DB_TABLE} WHERE status = 'LABELED'"
-                with db.connection.cursor() as cur:
-                    cur.execute(sql_count)
-                    total_labeled_images = cur.fetchone()[0]
-                
-                if total_labeled_images >= TRAIN_DATA_THRESHOLD:
-                    print(f"🔥 [Auto-Train] Threshold reached ({total_labeled_images}/{TRAIN_DATA_THRESHOLD}). Triggering training pipeline...")
-                    # Kích hoạt Training Pipeline (Dùng is_mock=True để test cho an toàn)
-                    training_pipeline_task.delay(is_mock=True)
-                    tg.alert_training_ready(total_labeled_images)
+            tg = TelegramHandler()
+            tg.alert_task_archived(task_id)
+
+            sql_count = f"SELECT COUNT(*) FROM {DB_TABLE} WHERE status = 'LABELED'"
+            with db.connection.cursor() as cur:
+                cur.execute(sql_count)
+                total_labeled_images = cur.fetchone()[0]
+
+            if total_labeled_images >= TRAIN_DATA_THRESHOLD:
+                print(
+                    f"🔥 [Auto-Train] Threshold reached ({total_labeled_images}/{TRAIN_DATA_THRESHOLD}). "
+                    "Triggering training pipeline..."
+                )
+                training_pipeline_task.delay(is_mock=True)
+                tg.alert_training_ready(total_labeled_images)
         except Exception as e:
             print(f"❌ [Export] Error for task {task_id}: {e}")
 

@@ -1,31 +1,37 @@
+# Network mlops_traffic_net phải tồn tại trước:
+#   docker network create mlops_traffic_net
+# Thứ tự: core-backbone up -d  ->  pipeline up -d --build
+
+x-pipeline-app: &pipeline-app
+  build:
+    context: ..
+    dockerfile: pipeline/Dockerfile
+  image: pipeline-app:latest
+  pull_policy: never
+
+x-pipeline-env: &pipeline-env
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  MINIO_URL: minio:9000
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadminpassword
+  DB_HOST: db
+  DB_NAME: traffic_db
+  DB_USER: admin
+  DB_PASSWORD: password123
+  MQTT_BROKER: mqtt
+  CVAT_URL: ${CVAT_URL:-http://host.docker.internal:8080}
+  CVAT_HOST_HEADER: 127.0.0.1
+  CVAT_MINIO_ENDPOINT: http://core-backbone-minio-1:9000
+  CVAT_CLOUD_STORAGE_ID: "5"
+
 services:
-  # 1. Celery Worker: Thực thi các task
   worker:
-    build:
-      context: ..
-      dockerfile: pipeline/Dockerfile
-    image: pipeline-app:latest
+    <<: *pipeline-app
     command: celery -A pipeline.celery_app worker --loglevel=info --concurrency=1
     restart: always
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - MINIO_URL=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadminpassword
-      - CVAT_URL=${CVAT_URL:-http://172.16.0.252:8080}
-      - DB_HOST=db
-      - DB_NAME=traffic_db
-      - DB_USER=admin
-      - DB_PASSWORD=password123
-      - MQTT_BROKER=mqtt
+      <<: *pipeline-env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -35,38 +41,29 @@ services:
     networks:
       - mlops_traffic_net
 
-  # 2. Celery Beat: Lập lịch cho task
   beat:
-    image: pipeline-app:latest
+    <<: *pipeline-app
     command: celery -A pipeline.celery_app beat --loglevel=info
     restart: always
     depends_on:
       - worker
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DB_HOST=db
-      - DB_NAME=traffic_db
-      - DB_USER=admin
-      - DB_PASSWORD=password123
+      <<: *pipeline-env
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ..:/app
     networks:
       - mlops_traffic_net
 
-  # 3. MQTT Listener: Nhận dữ liệu từ Jetson
   mqtt_listener:
-    image: pipeline-app:latest
+    <<: *pipeline-app
     command: python3 -m pipeline.services.mqtt_service
     restart: always
-    environment:
-      - MQTT_BROKER=mqtt
-      - DB_HOST=db
-      - DB_NAME=traffic_db
-      - DB_USER=admin
-      - DB_PASSWORD=password123
     depends_on:
-      - beat
+      - worker
+    environment:
+      <<: *pipeline-env
     volumes:
       - ..:/app
     networks:
