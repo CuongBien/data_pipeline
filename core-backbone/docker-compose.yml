@@ -22,11 +22,30 @@ services:
       MINIO_ROOT_PASSWORD: minioadminpassword
     command: server /data --console-address ":9001"
 
-  # 3. Redis làm Broker cho Celery
+  # Tạo bucket MinIO lúc khởi động (CVAT Cloud Storage trỏ bucket raw-data).
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    restart: on-failure
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadminpassword; do sleep 2; done;
+      mc mb --ignore-existing local/raw-data;
+      mc mb --ignore-existing local/pseudo-labels;
+      mc mb --ignore-existing local/archived-images;
+      mc mb --ignore-existing local/archived-labels;
+      mc mb --ignore-existing local/labeled-data;
+      mc mb --ignore-existing local/base-dataset;
+      mc mb --ignore-existing local/production-models;
+      echo 'MinIO buckets ready';
+      "
+
+  # 3. Redis — Celery broker (pipeline: redis://redis:6379 trên mlops_traffic_net).
+  # Không map ra host :6379 để tránh xung đột với container/process Redis cũ trên máy.
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
 
   # 3. MQTT Broker để nhận tin nhắn từ Edge
   mqtt:
