@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: password123
       POSTGRES_DB: traffic_db
     ports:
-      - "55432:5432"
+      - "54321:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
