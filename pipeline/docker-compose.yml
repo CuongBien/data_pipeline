@@ -23,13 +23,16 @@ x-pipeline-env: &pipeline-env
   CVAT_URL: ${CVAT_URL:-http://host.docker.internal:8080}
   CVAT_HOST_HEADER: 127.0.0.1
   CVAT_MINIO_ENDPOINT: http://core-backbone-minio-1:9000
-  CVAT_CLOUD_STORAGE_ID: "5"
+  CVAT_CLOUD_STORAGE_ID: ${CVAT_CLOUD_STORAGE_ID:-5}
+  CVAT_PROJECT_ID: ${CVAT_PROJECT_ID}
 
 services:
   worker:
     <<: *pipeline-app
     command: celery -A pipeline.celery_app worker --loglevel=info --concurrency=1
     restart: always
+    env_file:
+      - ../../.env
     environment:
       <<: *pipeline-env
     extra_hosts:
@@ -47,6 +50,8 @@ services:
     restart: always
     depends_on:
       - worker
+    env_file:
+      - ../../.env
     environment:
       <<: *pipeline-env
     extra_hosts:
@@ -62,6 +67,8 @@ services:
     restart: always
     depends_on:
       - worker
+    env_file:
+      - ../../.env
     environment:
       <<: *pipeline-env
     volumes:

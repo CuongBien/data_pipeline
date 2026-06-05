@@ -20,7 +20,7 @@ LABELS = [
 
 CLOUD_STORAGE_NAME = "minio_raw_data"
 BUCKET_NAME = "raw-data"
-MINIO_ENDPOINT = "http://minio:9000"
+MINIO_ENDPOINT = "http://172.16.0.252:9000"
 MINIO_ACCESS_KEY = "minioadmin"
 MINIO_SECRET_KEY = "minioadminpassword"
 
