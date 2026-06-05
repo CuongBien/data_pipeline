@@ -4,21 +4,27 @@ services:
     build:
       context: ..
       dockerfile: pipeline/Dockerfile
+    image: pipeline-app:latest
     command: celery -A pipeline.celery_app worker --loglevel=info --concurrency=1
     restart: always
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password123
       - CVAT_URL=http://192.168.1.29:8080
       - DB_HOST=db
+      - DB_NAME=c2_tracking
+      - DB_USER=admin
+      - DB_PASSWORD=admin
       - MQTT_BROKER=mqtt
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -31,9 +37,7 @@ services:
 
   # 2. Celery Beat: Lập lịch cho task
   beat:
-    build:
-      context: ..
-      dockerfile: pipeline/Dockerfile
+    image: pipeline-app:latest
     command: celery -A pipeline.celery_app beat --loglevel=info
     restart: always
     depends_on:
@@ -41,6 +45,10 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DB_HOST=db
+      - DB_NAME=c2_tracking
+      - DB_USER=admin
+      - DB_PASSWORD=admin
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -48,14 +56,15 @@ services:
 
   # 3. MQTT Listener: Nhận dữ liệu từ Jetson
   mqtt_listener:
-    build:
-      context: ..
-      dockerfile: pipeline/Dockerfile
+    image: pipeline-app:latest
     command: python3 -m pipeline.services.mqtt_service
     restart: always
     environment:
       - MQTT_BROKER=mqtt
       - DB_HOST=db
+      - DB_NAME=c2_tracking
+      - DB_USER=admin
+      - DB_PASSWORD=admin
     depends_on:
       - beat
     volumes:
